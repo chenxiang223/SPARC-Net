@@ -1,0 +1,43 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local virtual environments and package caches
+.venv/
+venv/
+env/
+cvoca-feinfn/.ldx_py39_pkgs/
+cvoca-feinfn/.pip_cache/
+cvoca-feinfn/.pip_tmp/
+
+# Datasets and generated experiment outputs
+cvoca-feinfn/datasets/
+cvoca-feinfn/logs/
+logs/
+other-Method/logs/
+fig/
+
+# Local documents/spreadsheets are not part of the engineering code sync
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.pdf
+
+# Model checkpoints and heavy binaries
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npy
+*.npz
+*.mat
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
