@@ -89,7 +89,7 @@ DATASET_PRESETS: Dict[str, Dict[str, Any]] = {
 VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
     "full": {
         "label": "Full",
-        "description": "Full SPARC-Net with all feature-fusion modules enabled.",
+        "description": "Full SPARC-Net after removing the negative APTA branch.",
         "switches": {
             "use_phase_amplitude_fusion_backbone": True,
             "use_dynamic_prototype_head": True,
@@ -108,15 +108,15 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
             "backbone_detail": {"use_complex_attention": False},
         },
     },
-    "wo_apta": {
-        "label": "w/o APTA",
-        "description": "Replace the amplitude-phase token adapter with a plain real-imag token adapter.",
+    "with_apta": {
+        "label": "w/ APTA",
+        "description": "Legacy comparison that re-enables the removed amplitude-phase token adapter.",
         "switches": {
             "use_phase_amplitude_fusion_backbone": True,
             "use_dynamic_prototype_head": True,
             "use_decoupled_training_engine": True,
             "use_adaptive_posthoc_calibration": True,
-            "backbone_detail": {"use_apta": False},
+            "backbone_detail": {"use_apta": True},
         },
     },
     "wo_sffc": {
@@ -223,6 +223,8 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+DEFAULT_VARIANT_KEYS = [key for key in VARIANT_PRESETS if key != "with_apta"]
+
 
 SUMMARY_METRIC_KEYS = ("oa", "aa", "kappa", "macro_f1", "head_aa", "medium_aa", "tail_aa")
 
@@ -301,8 +303,11 @@ def parse_args() -> argparse.Namespace:
         "--variants",
         nargs="+",
         choices=sorted(VARIANT_PRESETS),
-        default=list(VARIANT_PRESETS.keys()),
-        help="Ablation variants to run. Default uses every registered preset.",
+        default=DEFAULT_VARIANT_KEYS,
+        help=(
+            "Ablation variants to run. Default uses the paper variants after APTA removal; "
+            "pass 'with_apta' explicitly for the legacy negative-module comparison."
+        ),
     )
     parser.add_argument("--gpu", type=int, default=0, help="CUDA device index. Use -1 to let the trainer auto-select.")
     parser.add_argument("--stage1-epochs", type=int, default=None)
