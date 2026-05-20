@@ -1,0 +1,42 @@
+# Local paper and writing artifacts
+IEEE-TCSVT-SPARC/
+cf2_laTex/
+fig/
+*.doc
+*.docx
+*.pdf
+*.ppt
+*.pptx
+*.xls
+*.xlsx
+*.zip
+
+# Data, logs, generated outputs, and environments
+**/datasets/
+**/logs/
+**/fig/
+**/.venv/
+**/venv/
+**/env/
+**/__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+
+# Experiment artifacts
+**/results/
+**/outputs/
+**/runs/
+**/checkpoints/
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.npy
+**/*.npz
+**/*.mat
+**/*.h5
+**/*.hdf5
+
+# Temporary sync workspaces
+.sync_tmp/
+sync_backups/
