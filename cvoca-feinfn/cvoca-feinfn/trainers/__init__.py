@@ -3,7 +3,6 @@ from .calibration import (
     ClassWiseLogitScaler,
     PostHocCalibrationConfig,
     PostHocLogitCalibrator,
-    TailAwareLogitScaler,
     RTPCConfig,
     ReversibleTailPriorCalibrator,
 )
@@ -20,7 +19,6 @@ from .train_engine import (
 __all__ = [
     "CalibrationResult",
     "ClassWiseLogitScaler",
-    "TailAwareLogitScaler",
     "DecoupledLongTailTrainer",
     "DecoupledTrainerConfig",
     "StagedLongTailTrainer",

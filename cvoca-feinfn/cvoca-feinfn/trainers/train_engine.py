@@ -417,7 +417,7 @@ class StagedLongTailTrainer:
         self._tune_prototype_correction_scale(val_loader)
 
         if self.config.calibration is not None:
-            self.logit_calibrator, self.calibration_result = self._fit_rtpc_calibration(
+            self.logit_calibrator, self.calibration_result = self._fit_posthoc_calibration(
                 train_loader,
                 val_loader=val_loader,
                 balanced_train_loader=balanced_train_loader,
@@ -765,7 +765,7 @@ class StagedLongTailTrainer:
             parts.append(f"val_macro_acc={calibration_result.val_macro_acc:.4f}")
         parts.append(f"prior_mode={calibration_result.prior_mode}")
         parts.append(f"prior_alpha={calibration_result.prior_alpha:.4f}")
-        parts.append(f"reversibility={calibration_result.reversibility_strength:.2f}")
+        parts.append(f"blend={calibration_result.blend_strength:.2f}")
         print(" | ".join(parts), flush=True)
 
     def _infer_class_counts(self) -> torch.Tensor:
@@ -799,7 +799,7 @@ class StagedLongTailTrainer:
             )
         return torch.cat(all_logits, dim=0), torch.cat(all_labels, dim=0)
 
-    def _fit_rtpc_calibration(self, train_loader, *, val_loader=None, balanced_train_loader=None):
+    def _fit_posthoc_calibration(self, train_loader, *, val_loader=None, balanced_train_loader=None):
         cfg = self.config.calibration
         if cfg is None:
             return None, None
@@ -809,10 +809,10 @@ class StagedLongTailTrainer:
             num_classes=int(class_counts.numel()),
             class_counts=class_counts,
             learn_class_scales=cfg.learn_class_scales,
-            learn_logit_residual_corrector=cfg.learn_logit_residual_corrector,
+            learn_logit_mixer=cfg.learn_logit_mixer,
             normalize_scales=cfg.normalize_scales,
             max_log_scale=cfg.max_log_scale,
-            max_logit_residual=cfg.max_logit_residual,
+            max_logit_mixer_residual=cfg.max_logit_mixer_residual,
             effective_num_beta=cfg.effective_num_beta,
         ).to(self.device)
 
@@ -874,51 +874,49 @@ class StagedLongTailTrainer:
                 dtype=scaled_val_logits.dtype,
             ).view(1, -1)
 
-            reversibility_candidates = sorted(
-                {min(1.0, max(0.0, float(x))) for x in cfg.reversibility_candidates} | {0.0, 1.0}
-            )
-            best_reversibility = 0.0
+            blend_candidates = sorted({min(1.0, max(0.0, float(x))) for x in cfg.blend_candidates} | {0.0, 1.0})
+            best_blend = 0.0
             best_loss = base_val_loss
             best_acc = base_val_acc
             best_macro_acc = base_val_macro_acc
             best_score = base_score
-            reversibility_scores = []
-            for reversibility in reversibility_candidates:
-                reversible_logits = base_val_logits + reversibility * (full_val_logits - base_val_logits)
-                cand_loss, cand_acc, cand_macro_acc, cand_score = measure_logits(reversible_logits, val_labels)
-                reversibility_scores.append((reversibility, cand_score))
+            blend_scores = []
+            for blend in blend_candidates:
+                blended_logits = base_val_logits + blend * (full_val_logits - base_val_logits)
+                cand_loss, cand_acc, cand_macro_acc, cand_score = measure_logits(blended_logits, val_labels)
+                blend_scores.append((blend, cand_score))
                 improves_score = cand_score > best_score
                 preserves_score_and_improves_loss = (
                     cand_score >= best_score - 1e-12
                     and cand_loss < best_loss - cfg.min_val_loss_gain
-                    and reversibility > 0.0
+                    and blend > 0.0
                 )
                 if improves_score or preserves_score_and_improves_loss:
-                    best_reversibility = reversibility
+                    best_blend = blend
                     best_loss = cand_loss
                     best_acc = cand_acc
                     best_macro_acc = cand_macro_acc
                     best_score = cand_score
 
-            if best_reversibility > 0.0 and best_score < base_score + cfg.min_val_gain:
+            if best_blend > 0.0 and best_score < base_score + cfg.min_val_gain:
                 loss_gain = base_val_loss - best_loss
                 if loss_gain < cfg.min_val_loss_gain:
-                    best_reversibility = 0.0
+                    best_blend = 0.0
                     best_loss = base_val_loss
                     best_acc = base_val_acc
                     best_macro_acc = base_val_macro_acc
-            if best_reversibility == 0.0:
+            if best_blend == 0.0:
                 calibrator.set_prior_correction("none", 0.0)
-            calibrator.set_reversibility_strength(best_reversibility)
+            calibrator.set_blend_strength(best_blend)
             val_loss = best_loss
             val_acc = best_acc
             val_macro_acc = best_macro_acc
 
-            score_text = ", ".join(f"{strength:.2f}:{score:.5f}" for strength, score in reversibility_scores)
-            print(f"[rtpc_reversibility_candidates] {score_text}", flush=True)
+            score_text = ", ".join(f"{blend:.2f}:{score:.5f}" for blend, score in blend_scores)
+            print(f"[calibration_blend_candidates] {score_text}", flush=True)
         else:
             calibrator.set_prior_correction(cfg.default_prior_mode, cfg.default_prior_alpha)
-            calibrator.set_reversibility_strength(1.0)
+            calibrator.set_blend_strength(1.0)
             val_loss = None
             val_acc = None
             val_macro_acc = None
@@ -936,12 +934,12 @@ class StagedLongTailTrainer:
             val_macro_acc=val_macro_acc,
             prior_mode=calibrator.prior_mode,
             prior_alpha=calibrator.prior_alpha,
-            reversibility_strength=float(calibrator.reversibility_strength.detach().cpu().item()),
+            blend_strength=float(calibrator.blend_strength.detach().cpu().item()),
             baseline_val_acc=baseline_val_acc,
             baseline_val_macro_acc=baseline_val_macro_acc,
         )
 
 
-# Backward-compatible aliases for older experiment scripts.
+# Backward-compatible aliases for older Windows experiment scripts.
 DecoupledTrainerConfig = StagedTrainerConfig
 DecoupledLongTailTrainer = StagedLongTailTrainer

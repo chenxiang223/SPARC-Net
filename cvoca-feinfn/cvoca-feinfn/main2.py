@@ -185,10 +185,8 @@ CONFIG: Dict[str, Any] = {
         "lr": 5e-3,
         "weight_decay": 0.0,
         "learn_class_scales": True,
-        "learn_logit_residual_corrector": True,
         "normalize_scales": True,
         "max_log_scale": 0.25,
-        "max_logit_residual": 0.08,
         "train_loader_preference": "balanced",
         "prior_modes": ("none", "frequency", "effective_num"),
         "prior_alpha_candidates": (0.0, 0.1, 0.2, 0.35, 0.5),
@@ -196,7 +194,6 @@ CONFIG: Dict[str, Any] = {
         "default_prior_alpha": 0.0,
         "effective_num_beta": 0.999,
         "monitor": "acc",
-        "reversibility_candidates": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
     },
     "runtime": {
         "device": RUNTIME_DEVICE,  # 运行设备；默认按上方 SELECTED_GPU_INDEX 映射到 cuda:N。
@@ -214,25 +211,27 @@ CONFIG["dataset"]["ablation"] = {
     # 一级总消融开关：
     # True  = 启用该创新点对应的完整创新模块。
     # False = 关闭该创新点，并切换到非创新的 baseline 模块/流程。
-    "use_spap_backbone": True,  # 创新点1总开关：SPAP Backbone。关闭后改用普通残差CNN backbone。
-    "use_mrpc_head": False,  # 创新点2总开关：MRPC Head。关闭后改用普通 cosine baseline head。
-    "use_staged_training_engine": True,  # 创新点3总开关：主分支优先分阶段训练引擎。关闭后改为单阶段训练。
-    "use_rtpc_calibration": True,  # 创新点4总开关：RTPC 模块。关闭后不进行 stage3 calibration。
+    "use_spap_backbone": True,  # 创新点1总开关：复值感知空频融合主干。关闭后改用普通残差CNN backbone。
+    "use_mrpc_head": False,  # 创新点2总开关：动量双原型关系分类头。关闭后改用普通 cosine baseline head。
+    "use_staged_training_engine": True,  # 创新点3总开关：两阶段解耦训练引擎。关闭后改为单阶段训练。
+    "use_rtpc_calibration": True,  # 创新点4总开关：事后校准模块。关闭后不进行 stage3 calibration。
 
     # 二级子消融开关：
     # 这些开关仅在对应的一级总开关为 True 时生效，用于分析模块内部子机制。
     "backbone_detail": {
-        "use_complex_attention": False,  # APCR 相幅通道重标定：控制幅值/相位联合重标定。
-        "use_spatial_branch": True,  # 空间高频分支：控制局部边缘与纹理增强。
-        "use_frequency_branch": True,  # 频域分支：控制空间频率与光谱频率联合建模。
-        "use_tsfi": True,  # TSFI交互：控制空间与频率分支的跨域融合。
-        "use_transformer": True,  # Transformer重标定：控制全局依赖补充。
-        "use_multi_scale": True,  # 多尺度上下文：控制不同感受野的信息补偿。
-        "use_spectral_bypass": True,  # SAB 光谱锚定旁路：控制原始谱型保真回补。
+        "use_complex_attention": False,  # APCR: amplitude-phase channel recalibration.
+        "use_apta": True,  # APTA: amplitude-phase token adapter.
+        "use_spatial_branch": True,  # Spatial high-frequency branch.
+        "use_frequency_branch": True,  # DAF Branch: dual-axis amplitude-phase frequency branch.
+        "use_tsfi": True,  # TSFI: token-guided spatial-frequency interaction.
+        "use_transformer": True,  # Global transformer recalibration.
+        "use_multi_scale": True,  # Multi-scale context module.
+        "use_sff_gate": True,  # Spectral fidelity fusion gate.
+        "use_spectral_bypass": True,  # SAB: spectral anchor bypass.
     },
     "head_detail": {
-        "use_prototype_branch": True,  # 类别锚纠偏分支：控制稳定/上下文类别锚多锚匹配。
-        "use_dynamic_gate": True,  # 证据信任门：控制原型分支对主分类分支的轻量纠偏。
+        "use_prototype_branch": True,  # 原型关系分支：控制动量双原型/多原型匹配。
+        "use_dynamic_gate": True,  # 动态关系门控：控制原型分支对主分类分支的轻量纠偏。
     },
     "training_detail": {
         "use_auxiliary_heads": True,  # 辅助监督头：控制deep supervision。
@@ -333,13 +332,22 @@ DEFAULT_INNOVATION_SWITCHES: Dict[str, bool] = {
     "use_rtpc_calibration": True,
 }
 
+INNOVATION_SWITCH_ALIASES: Dict[str, str] = {
+    "use_phase_amplitude_fusion_backbone": "use_spap_backbone",
+    "use_dynamic_prototype_head": "use_mrpc_head",
+    "use_decoupled_training_engine": "use_staged_training_engine",
+    "use_adaptive_posthoc_calibration": "use_rtpc_calibration",
+}
+
 DEFAULT_BACKBONE_DETAIL_SWITCHES: Dict[str, bool] = {
     "use_complex_attention": True,
+    "use_apta": True,
     "use_spatial_branch": True,
     "use_frequency_branch": True,
     "use_tsfi": True,
     "use_transformer": True,
     "use_multi_scale": True,
+    "use_sff_gate": True,
     "use_spectral_bypass": True,
 }
 
@@ -354,11 +362,24 @@ DEFAULT_TRAINING_DETAIL_SWITCHES: Dict[str, bool] = {
 }
 
 
+def _normalize_innovation_switch_names(user_switches: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(user_switches)
+    for old_key, new_key in INNOVATION_SWITCH_ALIASES.items():
+        if old_key not in normalized:
+            continue
+        old_value = normalized.pop(old_key)
+        if new_key in normalized and normalized[new_key] != old_value:
+            raise ValueError(f"Conflicting ablation switches: {old_key} and {new_key}.")
+        normalized[new_key] = old_value
+    return normalized
+
+
 def get_innovation_switches(config: Dict[str, Any]) -> Dict[str, bool]:
     dataset_cfg = config["dataset"]
     user_switches = dataset_cfg.get("ablation", {})
     if not isinstance(user_switches, dict):
         raise ValueError("CONFIG['dataset']['ablation'] must be a dict.")
+    user_switches = _normalize_innovation_switch_names(user_switches)
 
     detail_keys = {"backbone_detail", "head_detail", "training_detail"}
     unknown_keys = sorted(set(user_switches) - set(DEFAULT_INNOVATION_SWITCHES) - detail_keys)
@@ -384,6 +405,12 @@ def _resolve_detail_switches(
         return defaults.copy()
     if not isinstance(user_values, dict):
         raise ValueError(f"CONFIG['dataset']['ablation']['{section_name}'] must be a dict.")
+    if section_name == "backbone_detail" and "use_sfid" in user_values:
+        user_values = dict(user_values)
+        use_sfid = user_values.pop("use_sfid")
+        if "use_tsfi" in user_values and user_values["use_tsfi"] != use_sfid:
+            raise ValueError("Conflicting ablation switches: backbone_detail.use_sfid and use_tsfi.")
+        user_values["use_tsfi"] = use_sfid
 
     unknown_keys = sorted(set(user_values) - set(defaults))
     if unknown_keys:
@@ -434,11 +461,13 @@ def get_ablation_switches(config: Dict[str, Any]) -> Dict[str, Any]:
         "backbone_mode": "innovation1" if backbone_on else "baseline",
         "head_mode": "innovation2" if prototype_head_on else "baseline",
         "use_complex_attention": backbone_on and detail["backbone_detail"]["use_complex_attention"],
+        "use_apta": backbone_on and detail["backbone_detail"]["use_apta"],
         "use_spatial_branch": backbone_on and detail["backbone_detail"]["use_spatial_branch"],
         "use_frequency_branch": backbone_on and detail["backbone_detail"]["use_frequency_branch"],
         "use_tsfi": backbone_on and detail["backbone_detail"]["use_tsfi"],
         "use_transformer": backbone_on and detail["backbone_detail"]["use_transformer"],
         "use_multi_scale": backbone_on and detail["backbone_detail"]["use_multi_scale"],
+        "use_sff_gate": backbone_on and detail["backbone_detail"]["use_sff_gate"],
         "use_spectral_bypass": backbone_on and detail["backbone_detail"]["use_spectral_bypass"],
         "use_prototype_branch": prototype_head_on and detail["head_detail"]["use_prototype_branch"],
         "use_dynamic_gate": prototype_head_on and detail["head_detail"]["use_dynamic_gate"],
@@ -473,11 +502,13 @@ def build_effective_model_config(config: Dict[str, Any], ablation: Dict[str, Any
             "backbone_mode": ablation["backbone_mode"],
             "head_mode": ablation["head_mode"],
             "use_complex_attention": ablation["use_complex_attention"],
+            "use_apta": ablation["use_apta"],
             "use_spatial_branch": ablation["use_spatial_branch"],
             "use_frequency_branch": ablation["use_frequency_branch"],
             "use_tsfi": ablation["use_tsfi"],
             "use_transformer": ablation["use_transformer"],
             "use_multi_scale": ablation["use_multi_scale"],
+            "use_sff_gate": ablation["use_sff_gate"],
             "use_spectral_bypass": ablation["use_spectral_bypass"],
             "use_prototype_branch": ablation["use_prototype_branch"],
             "use_dynamic_gate": ablation["use_dynamic_gate"],
@@ -781,14 +812,14 @@ def print_split_summary(bundle, config: Dict[str, Any]) -> None:
 def print_ablation_plan(config: Dict[str, Any]) -> None:
     innovation = get_innovation_switches(config)
     ablation = get_ablation_switches(config)
-    print_section("Innovation Ablation Switches")
+    print_section("SPARC-Net Ablation Switches")
     print(
         format_key_value_block(
             [
-                ("Innovation1 total module", innovation["use_spap_backbone"]),
-                ("Innovation2 total module", innovation["use_mrpc_head"]),
-                ("Innovation3 total module", innovation["use_staged_training_engine"]),
-                ("Innovation4 total module", innovation["use_rtpc_calibration"]),
+                ("SPAP Backbone", innovation["use_spap_backbone"]),
+                ("MRPC Head", innovation["use_mrpc_head"]),
+                ("Staged Training Engine", innovation["use_staged_training_engine"]),
+                ("RTPC Calibration", innovation["use_rtpc_calibration"]),
             ]
         )
     )
@@ -798,13 +829,15 @@ def print_ablation_plan(config: Dict[str, Any]) -> None:
             [
                 ("Effective backbone mode", ablation["backbone_mode"]),
                 ("Effective head mode", ablation["head_mode"]),
-                ("Backbone detail - complex attn", ablation["use_complex_attention"]),
+                ("Backbone detail - APCR", ablation["use_complex_attention"]),
+                ("Backbone detail - APTA", ablation["use_apta"]),
                 ("Backbone detail - spatial branch", ablation["use_spatial_branch"]),
-                ("Backbone detail - frequency branch", ablation["use_frequency_branch"]),
+                ("Backbone detail - DAF Branch", ablation["use_frequency_branch"]),
                 ("Backbone detail - TSFI", ablation["use_tsfi"]),
                 ("Backbone detail - transformer", ablation["use_transformer"]),
                 ("Backbone detail - multi-scale", ablation["use_multi_scale"]),
-                ("Backbone detail - spectral bypass", ablation["use_spectral_bypass"]),
+                ("Backbone detail - SFF gate", ablation["use_sff_gate"]),
+                ("Backbone detail - SAB", ablation["use_spectral_bypass"]),
                 ("Head detail - prototype branch", ablation["use_prototype_branch"]),
                 ("Head detail - dynamic gate", ablation["use_dynamic_gate"]),
                 ("Training detail - auxiliary heads", ablation["use_auxiliary_heads"]),
@@ -922,10 +955,8 @@ def main() -> None:
             lr=CONFIG["calibration"]["lr"],
             weight_decay=CONFIG["calibration"]["weight_decay"],
             learn_class_scales=CONFIG["calibration"]["learn_class_scales"],
-            learn_logit_residual_corrector=CONFIG["calibration"]["learn_logit_residual_corrector"],
             normalize_scales=CONFIG["calibration"]["normalize_scales"],
             max_log_scale=CONFIG["calibration"]["max_log_scale"],
-            max_logit_residual=CONFIG["calibration"]["max_logit_residual"],
             train_loader_preference=CONFIG["calibration"]["train_loader_preference"],
             prior_modes=CONFIG["calibration"]["prior_modes"],
             prior_alpha_candidates=CONFIG["calibration"]["prior_alpha_candidates"],
@@ -933,7 +964,6 @@ def main() -> None:
             default_prior_alpha=CONFIG["calibration"]["default_prior_alpha"],
             effective_num_beta=CONFIG["calibration"]["effective_num_beta"],
             monitor=CONFIG["calibration"]["monitor"],
-            reversibility_candidates=CONFIG["calibration"]["reversibility_candidates"],
         )
 
     stage2_reset_classifier = CONFIG["trainer"]["stage2_reset_classifier"] if effective_stage_plan["use_stage2"] else False
@@ -1000,8 +1030,7 @@ def main() -> None:
     if trainer.calibration_result is not None:
         print(
             f"Calibration: prior_mode={trainer.calibration_result.prior_mode}, "
-            f"prior_alpha={trainer.calibration_result.prior_alpha:.4f}, "
-            f"reversibility={trainer.calibration_result.reversibility_strength:.2f}"
+            f"prior_alpha={trainer.calibration_result.prior_alpha:.4f}"
         )
     if history.best_test_eval is not None:
         print(

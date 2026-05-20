@@ -89,7 +89,7 @@ DATASET_PRESETS: Dict[str, Dict[str, Any]] = {
 VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
     "full": {
         "label": "Full",
-        "description": "All four innovations enabled.",
+        "description": "Full SPARC-Net with SPAP Backbone, MRPC Head, staged training, and RTPC enabled.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": True,
@@ -97,9 +97,73 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
             "use_rtpc_calibration": True,
         },
     },
+    "wo_apcr": {
+        "label": "w/o APCR",
+        "description": "Disable amplitude-phase channel recalibration inside ACSE.",
+        "switches": {
+            "use_spap_backbone": True,
+            "use_mrpc_head": True,
+            "use_staged_training_engine": True,
+            "use_rtpc_calibration": True,
+            "backbone_detail": {"use_complex_attention": False},
+        },
+    },
+    "wo_apta": {
+        "label": "w/o APTA",
+        "description": "Replace the amplitude-phase token adapter with a plain real-imag token adapter.",
+        "switches": {
+            "use_spap_backbone": True,
+            "use_mrpc_head": True,
+            "use_staged_training_engine": True,
+            "use_rtpc_calibration": True,
+            "backbone_detail": {"use_apta": False},
+        },
+    },
+    "wo_sffc": {
+        "label": "w/o SFFC",
+        "description": "Disable the spatial-frequency fusion core by removing spatial, frequency, and TSFI paths.",
+        "switches": {
+            "use_spap_backbone": True,
+            "use_mrpc_head": True,
+            "use_staged_training_engine": True,
+            "use_rtpc_calibration": True,
+            "backbone_detail": {
+                "use_spatial_branch": False,
+                "use_frequency_branch": False,
+                "use_tsfi": False,
+            },
+        },
+    },
+    "wo_tsfi": {
+        "label": "w/o TSFI",
+        "description": "Disable token-guided spatial-frequency interaction while keeping the two branches.",
+        "switches": {
+            "use_spap_backbone": True,
+            "use_mrpc_head": True,
+            "use_staged_training_engine": True,
+            "use_rtpc_calibration": True,
+            "backbone_detail": {"use_tsfi": False},
+        },
+    },
+    "wo_refinement_spectral_fidelity": {
+        "label": "w/o Refinement and Spectral Fidelity",
+        "description": "Disable refinement and spectral-fidelity modules after SFFC.",
+        "switches": {
+            "use_spap_backbone": True,
+            "use_mrpc_head": True,
+            "use_staged_training_engine": True,
+            "use_rtpc_calibration": True,
+            "backbone_detail": {
+                "use_transformer": False,
+                "use_multi_scale": False,
+                "use_sff_gate": False,
+                "use_spectral_bypass": False,
+            },
+        },
+    },
     "wo_innovation1": {
-        "label": "w.o Innovation1",
-        "description": "Replace the SPAP Backbone with the baseline backbone.",
+        "label": "w/o SPAP Backbone",
+        "description": "Replace the SPARC-Net SPAP backbone with the baseline backbone.",
         "switches": {
             "use_spap_backbone": False,
             "use_mrpc_head": True,
@@ -108,8 +172,8 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
         },
     },
     "wo_innovation2": {
-        "label": "w.o Innovation2",
-        "description": "Replace the MRPC Head with the baseline cosine head.",
+        "label": "w/o MRPC Head",
+        "description": "Replace the momentum dual-prototype relation head with the baseline cosine head.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": False,
@@ -118,7 +182,7 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
         },
     },
     "wo_innovation3": {
-        "label": "w.o Innovation3",
+        "label": "w/o Staged Training",
         "description": "Disable the staged training engine and train in a single stage.",
         "switches": {
             "use_spap_backbone": True,
@@ -128,8 +192,8 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
         },
     },
     "wo_innovation4": {
-        "label": "w.o Innovation4",
-        "description": "Disable RTPC.",
+        "label": "w/o RTPC",
+        "description": "Disable the adaptive post-hoc calibration module.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": True,
@@ -138,8 +202,8 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
         },
     },
     "wo_innovation2_3": {
-        "label": "w.o Innovation2&3",
-        "description": "Disable both the MRPC head and the staged training strategy.",
+        "label": "w/o MRPC Head & Staged Training",
+        "description": "Disable both the MRPC Head and the staged training strategy.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": False,
@@ -149,7 +213,7 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
     },
     "baseline": {
         "label": "Baseline",
-        "description": "Disable all four innovations.",
+        "description": "Disable SPAP Backbone, MRPC Head, staged training, and RTPC.",
         "switches": {
             "use_spap_backbone": False,
             "use_mrpc_head": False,
@@ -238,7 +302,7 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         choices=sorted(VARIANT_PRESETS),
         default=list(VARIANT_PRESETS.keys()),
-        help="Ablation variants to run. Default uses Full and the four total-module ablations.",
+        help="Ablation variants to run. Default uses every registered preset.",
     )
     parser.add_argument("--gpu", type=int, default=0, help="CUDA device index. Use -1 to let the trainer auto-select.")
     parser.add_argument("--stage1-epochs", type=int, default=None)
@@ -410,10 +474,10 @@ def run_single_experiment(cfg: Dict[str, Any]) -> Dict[str, Any]:
             lr=cfg["calibration"]["lr"],
             weight_decay=cfg["calibration"]["weight_decay"],
             learn_class_scales=cfg["calibration"]["learn_class_scales"],
-            learn_logit_residual_corrector=cfg["calibration"]["learn_logit_residual_corrector"],
+            learn_logit_mixer=cfg["calibration"]["learn_logit_mixer"],
             normalize_scales=cfg["calibration"]["normalize_scales"],
             max_log_scale=cfg["calibration"]["max_log_scale"],
-            max_logit_residual=cfg["calibration"]["max_logit_residual"],
+            max_logit_mixer_residual=cfg["calibration"]["max_logit_mixer_residual"],
             train_loader_preference=cfg["calibration"]["train_loader_preference"],
             prior_modes=cfg["calibration"]["prior_modes"],
             prior_alpha_candidates=cfg["calibration"]["prior_alpha_candidates"],
@@ -421,7 +485,7 @@ def run_single_experiment(cfg: Dict[str, Any]) -> Dict[str, Any]:
             default_prior_alpha=cfg["calibration"]["default_prior_alpha"],
             effective_num_beta=cfg["calibration"]["effective_num_beta"],
             monitor=cfg["calibration"]["monitor"],
-            reversibility_candidates=cfg["calibration"]["reversibility_candidates"],
+            blend_candidates=cfg["calibration"]["blend_candidates"],
             min_val_gain=cfg["calibration"]["min_val_gain"],
             min_val_loss_gain=cfg["calibration"]["min_val_loss_gain"],
         )
@@ -505,7 +569,7 @@ def run_single_experiment(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # Prefer the final frozen evaluation after post-hoc calibration and
     # validation-selected prototype correction. `history.best_test_eval`
     # is useful for diagnostics, but it is collected before the final
-    # prototype-correction search and would otherwise hide Innovation2's
+    # prototype-correction search and would otherwise hide MRPC Head's
     # selected inference-time behavior.
     eval_output = trainer.test_metrics if trainer.test_metrics is not None else trainer.evaluate(bundle.test_loader)
     metrics = eval_output["classification_metrics"]
@@ -575,7 +639,7 @@ def run_single_experiment(cfg: Dict[str, Any]) -> Dict[str, Any]:
         else {
             "prior_mode": trainer.calibration_result.prior_mode,
             "prior_alpha": float(trainer.calibration_result.prior_alpha),
-            "reversibility_strength": float(trainer.calibration_result.reversibility_strength),
+            "blend_strength": float(trainer.calibration_result.blend_strength),
             "train_macro_acc": float(trainer.calibration_result.train_macro_acc),
             "baseline_val_macro_acc": None
             if trainer.calibration_result.baseline_val_macro_acc is None

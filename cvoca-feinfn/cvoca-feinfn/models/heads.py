@@ -70,7 +70,7 @@ class CosineClassifier(nn.Module):
 
     Why this module exists:
     - It aligns naturally with margin-based long-tail losses.
-    - It reduces the classifier-norm bias highlighted in staged training work.
+    - It reduces the classifier-norm bias highlighted in decoupled training work.
     """
 
     def __init__(self, in_features: int, num_classes: int, scale: float = 30.0, eps: float = 1e-6) -> None:
@@ -154,12 +154,12 @@ class LongTailHeadOutput:
 
 class BaselineCosineHead(nn.Module):
     """
-    Plain cosine head used for strict Innovation2 ablation.
+    Plain cosine head used for strict MRPC Head ablation.
 
     This head intentionally removes the prototype-relation branch and keeps only:
     - pooled final-feature embedding;
     - a standard cosine classifier;
-    - optional auxiliary supervision and projection for Innovation3.
+    - optional auxiliary supervision and projection for staged training.
     """
 
     def __init__(
@@ -252,17 +252,17 @@ class BaselineCosineHead(nn.Module):
 
 class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
     """
-    Main-anchored reliable prototype correction head (MRPC Head).
+    Adaptive long-tail head for the current HSI backbone.
 
     The current revision keeps the cosine classifier as the dominant decision
-    branch and uses reliability-weighted stable/context class anchors as an
-    auxiliary long-tail stabilizer.
+    branch and uses a reliability-gated momentum dual-prototype relation path
+    as an auxiliary long-tail stabilizer.
 
     In practice this means:
     1. the final-feature cosine classifier remains the main prediction source;
-    2. multi-level cues update stable/context class-anchor memories with
-       reliability-weighted memory updates; and
-    3. anchor relations supervise and correct only after the memory bank
+    2. multi-level cues update stable/context prototype memories with
+       confidence-aware EMA; and
+    3. prototype relations supervise and correct only after the prototype bank
        is mature enough to be trusted.
     """
 
@@ -276,10 +276,8 @@ class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
         scale: float = 30.0,
         class_counts: Optional[Sequence[int] | Mapping[int, int] | torch.Tensor] = None,
         prototype_momentum: float = 0.9,
-        anchor_correction_min: float = 0.05,
-        anchor_correction_max: float = 0.45,
-        prototype_blend_min: Optional[float] = None,
-        prototype_blend_max: Optional[float] = None,
+        prototype_blend_min: float = 0.05,
+        prototype_blend_max: float = 0.45,
         use_prototype_branch: bool = True,
         use_dynamic_gate: bool = True,
         use_auxiliary_heads: bool = True,
@@ -297,16 +295,10 @@ class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
         self.margin_mode = "additive_cosine"
         self.num_classes = num_classes
         self.prototype_momentum = float(prototype_momentum)
-        if prototype_blend_min is not None:
-            anchor_correction_min = float(prototype_blend_min)
-        if prototype_blend_max is not None:
-            anchor_correction_max = float(prototype_blend_max)
-        self.anchor_correction_min = float(anchor_correction_min)
-        self.anchor_correction_max = float(anchor_correction_max)
-        self.prototype_blend_min = self.anchor_correction_min
-        self.prototype_blend_max = self.anchor_correction_max
-        if not 0.0 <= self.anchor_correction_min <= self.anchor_correction_max <= 1.0:
-            raise ValueError("anchor_correction_min/max must satisfy 0 <= min <= max <= 1.")
+        self.prototype_blend_min = float(prototype_blend_min)
+        self.prototype_blend_max = float(prototype_blend_max)
+        if not 0.0 <= self.prototype_blend_min <= self.prototype_blend_max <= 1.0:
+            raise ValueError("prototype_blend_min/max must satisfy 0 <= min <= max <= 1.")
         self.num_prototypes_per_class = 3
         self.prototype_temperature = 0.25
         self.prototype_new_slot_threshold = 0.72
@@ -315,7 +307,7 @@ class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
         self.prototype_reliability_tau = 4.0
         # Keep the original switch names for backward compatibility with the
         # ablation/config plumbing. Semantically this now enables the
-        # MRPC anchor-correction path rather than a standalone classifier.
+        # distribution-alignment branch rather than an online prototype bank.
         self.use_prototype_branch = use_prototype_branch
         self.use_dynamic_gate = use_dynamic_gate and use_prototype_branch
         self.alignment_scale_limit = float(alignment_scale_limit)
@@ -714,7 +706,7 @@ class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
     def _imbalance_strength(self) -> torch.Tensor:
         counts = self.class_counts.clamp(min=1.0)
         ratio = counts.max() / counts.min()
-        # MRPC regularization is designed for long-tail splits. On
+        # Prototype regularization is designed for long-tail splits. On
         # balanced splits, keep the upgraded head behaviorally close to the
         # baseline cosine head instead of injecting unnecessary bias.
         return (torch.log(ratio) / torch.log(counts.new_tensor(10.0))).clamp(min=0.0, max=1.0)
@@ -922,5 +914,5 @@ class MainAnchoredReliablePrototypeCorrectionHead(nn.Module):
                 param.requires_grad = True
 
 
-# Backward-compatible alias for older experiment scripts.
+# Backward-compatible alias for older Windows experiment scripts/checkpoints.
 LongTailDynamicHead = MainAnchoredReliablePrototypeCorrectionHead

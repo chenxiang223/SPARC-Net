@@ -295,7 +295,7 @@ def build_recommended_hsi_imbalance_loss(
     reduction: str = "mean",
 ) -> tuple[CBLDAMLoss, ImbalanceLossInfo]:
     """
-    Build the recommended loss preset for the current SPARCNet project.
+    Build the recommended loss preset for the current SPARC-Net project.
 
     Recommended preset:
     - LDAM margin from epoch 0.

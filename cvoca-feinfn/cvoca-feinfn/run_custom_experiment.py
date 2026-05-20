@@ -39,13 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage1-epochs", type=int, default=None)
     parser.add_argument("--stage2-epochs", type=int, default=None)
     parser.add_argument("--disable-calibration", action="store_true")
-    parser.add_argument("--disable-mrpc-head", "--disable-prototype-head", dest="disable_mrpc_head", action="store_true")
-    parser.add_argument(
-        "--disable-staged-engine",
-        "--disable-decoupled-engine",
-        dest="disable_staged_engine",
-        action="store_true",
-    )
+    parser.add_argument("--disable-prototype-head", action="store_true")
+    parser.add_argument("--disable-staged-training", action="store_true")
+    parser.add_argument("--disable-decoupled-engine", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--amp", action="store_true")
     return parser
 
@@ -79,9 +75,9 @@ def main() -> None:
         cfg["trainer"]["stage2_epochs"] = int(args.stage2_epochs)
     if args.disable_calibration:
         cfg["calibration"]["enabled"] = False
-    if args.disable_mrpc_head:
+    if args.disable_prototype_head:
         cfg["dataset"]["ablation"]["use_mrpc_head"] = False
-    if args.disable_staged_engine:
+    if args.disable_staged_training or args.disable_decoupled_engine:
         cfg["dataset"]["ablation"]["use_staged_training_engine"] = False
     if args.amp:
         cfg["trainer"]["amp"] = True
@@ -96,7 +92,7 @@ def main() -> None:
     else:
         print(f"[Train Samples/Class] {cfg['split']['train_samples_per_class']}")
     print(f"[MRPC Head] {cfg['dataset']['ablation']['use_mrpc_head']}")
-    print(f"[Staged Training] {cfg['dataset']['ablation']['use_staged_training_engine']}")
+    print(f"[Staged Training Engine] {cfg['dataset']['ablation']['use_staged_training_engine']}")
     print(f"[AMP] {cfg['trainer']['amp']}")
     print(flush=True)
     exp_main.main()

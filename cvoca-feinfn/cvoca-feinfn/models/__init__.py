@@ -19,19 +19,19 @@ from .heads import (
 )
 
 __all__ = [
+    "BaselineCosineHead",
     "AmplitudePhaseChannelRecalibration",
     "AmplitudePhaseTokenAdapter",
     "AnalyticComplexSpectralEncoder",
-    "BaselineCosineHead",
     "ClassificationHead",
     "CosineClassifier",
     "CVOCAFeINFNFusion",
     "DualAxisAmplitudePhaseFrequencyBranch",
     "LongTailDynamicHead",
-    "SPARCNet",
+    "MainAnchoredReliablePrototypeCorrectionHead",
     "SpatialFrequencyFusionCore",
     "SpectralAnchorBypass",
     "SpectralFidelityFusionGate",
+    "SPARCNet",
     "TokenGuidedSpatialFrequencyInteraction",
-    "MainAnchoredReliablePrototypeCorrectionHead",
 ]

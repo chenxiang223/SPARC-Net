@@ -128,7 +128,7 @@ def build_prior_bias(
 @dataclass(frozen=True)
 class RTPCConfig:
     """
-    Reversible Tail-Prior Calibration (RTPC) for the frozen SPARC-Net logits.
+    Stage-3 post-hoc calibration for decoupled long-tail training.
 
     Why this module exists:
     - The decoupling paper shows that a fixed representation can still benefit
@@ -136,23 +136,19 @@ class RTPCConfig:
     - The prior-gap paper highlights that long-tail models often retain a bias
       toward the training prior even after the representation is learned.
 
-    For the current HSI model we use a reversible logit-space variant:
+    For the current HSI model we use a logit-space variant:
     1. learn class-wise positive logit scales on top of the frozen model;
-    2. fit a constrained logit residual corrector;
-    3. search an additive prior-correction bias on the validation set; and
-    4. search a reversibility strength so the correction can fall back to the base logits.
+    2. search an additive prior-correction bias on the validation set.
     """
 
     epochs: int = 20
     lr: float = 5e-3
     weight_decay: float = 0.0
     learn_class_scales: bool = True
-    learn_logit_residual_corrector: bool = True
-    learn_logit_mixer: Optional[bool] = None
+    learn_logit_mixer: bool = True
     normalize_scales: bool = True
     max_log_scale: Optional[float] = 0.25
-    max_logit_residual: float = 0.08
-    max_logit_mixer_residual: Optional[float] = None
+    max_logit_mixer_residual: float = 0.08
     train_loader_preference: str = "balanced"
     prior_modes: Sequence[str] = ("none", "frequency", "effective_num")
     prior_alpha_candidates: Sequence[float] = (0.0, 0.1, 0.2, 0.35, 0.5)
@@ -160,18 +156,9 @@ class RTPCConfig:
     default_prior_alpha: float = 0.0
     effective_num_beta: float = 0.999
     monitor: str = "acc"
-    reversibility_candidates: Sequence[float] = (0.0, 0.20, 0.40, 0.60, 0.80, 1.0)
-    blend_candidates: Optional[Sequence[float]] = None
+    blend_candidates: Sequence[float] = (0.0, 0.20, 0.40, 0.60, 0.80, 1.0)
     min_val_gain: float = 0.0002
     min_val_loss_gain: float = 1e-4
-
-    def __post_init__(self) -> None:
-        if self.learn_logit_mixer is not None:
-            object.__setattr__(self, "learn_logit_residual_corrector", bool(self.learn_logit_mixer))
-        if self.max_logit_mixer_residual is not None:
-            object.__setattr__(self, "max_logit_residual", float(self.max_logit_mixer_residual))
-        if self.blend_candidates is not None:
-            object.__setattr__(self, "reversibility_candidates", self.blend_candidates)
 
 
 @dataclass(frozen=True)
@@ -184,18 +171,9 @@ class CalibrationResult:
     val_macro_acc: Optional[float]
     prior_mode: str
     prior_alpha: float
-    reversibility_strength: Optional[float] = None
-    blend_strength: Optional[float] = None
+    blend_strength: float
     baseline_val_acc: Optional[float] = None
     baseline_val_macro_acc: Optional[float] = None
-
-    def __post_init__(self) -> None:
-        if self.reversibility_strength is None and self.blend_strength is None:
-            raise ValueError("CalibrationResult requires reversibility_strength.")
-        value = self.reversibility_strength if self.reversibility_strength is not None else self.blend_strength
-        value = float(value)
-        object.__setattr__(self, "reversibility_strength", value)
-        object.__setattr__(self, "blend_strength", value)
 
 
 @dataclass(frozen=True)
@@ -207,9 +185,9 @@ class PriorSearchResult:
     val_macro_acc: float
 
 
-class TailAwareLogitScaler(nn.Module):
+class ClassWiseLogitScaler(nn.Module):
     """
-    Tail-aware class-wise logit scaler used inside RTPC.
+    Lightweight LWS-style adapter in logit space.
 
     The original LWS idea learns per-class scaling factors after the backbone is
     frozen. Because the current head fuses cosine logits and prototype logits,
@@ -244,13 +222,11 @@ class TailAwareLogitScaler(nn.Module):
 
 class ReversibleTailPriorCalibrator(nn.Module):
     """
-    Final RTPC layer applied after the frozen model emits logits.
+    Final calibration layer applied after the frozen model emits logits.
 
     Order:
     1. optional class-wise positive scaling;
-    2. constrained logit residual correction;
-    3. additive prior-correction bias;
-    4. reversible interpolation with the base logits.
+    2. additive prior-correction bias.
     """
 
     def __init__(
@@ -259,31 +235,25 @@ class ReversibleTailPriorCalibrator(nn.Module):
         class_counts: Iterable[int] | Mapping[int, int] | torch.Tensor,
         *,
         learn_class_scales: bool = True,
-        learn_logit_residual_corrector: bool = True,
-        learn_logit_mixer: Optional[bool] = None,
+        learn_logit_mixer: bool = True,
         normalize_scales: bool = True,
         max_log_scale: Optional[float] = None,
-        max_logit_residual: float = 0.08,
-        max_logit_mixer_residual: Optional[float] = None,
+        max_logit_mixer_residual: float = 0.08,
         effective_num_beta: float = 0.999,
     ) -> None:
         super().__init__()
-        if learn_logit_mixer is not None:
-            learn_logit_residual_corrector = bool(learn_logit_mixer)
-        if max_logit_mixer_residual is not None:
-            max_logit_residual = float(max_logit_mixer_residual)
         self.num_classes = int(num_classes)
         self.effective_num_beta = float(effective_num_beta)
-        self.max_logit_residual = float(max_logit_residual)
+        self.max_logit_mixer_residual = float(max_logit_mixer_residual)
         counts = _to_class_count_tensor(class_counts)
         if counts.numel() != self.num_classes:
             raise ValueError(f"class_counts has {counts.numel()} classes, expected {self.num_classes}.")
 
         self.register_buffer("class_counts", counts)
         self.register_buffer("prior_bias", torch.zeros(self.num_classes, dtype=torch.float32))
-        self.register_buffer("reversibility_strength", torch.ones((), dtype=torch.float32))
+        self.register_buffer("blend_strength", torch.ones((), dtype=torch.float32))
         self.scaler = (
-            TailAwareLogitScaler(
+            ClassWiseLogitScaler(
                 self.num_classes,
                 normalize_scales=normalize_scales,
                 max_log_scale=max_log_scale,
@@ -291,42 +261,23 @@ class ReversibleTailPriorCalibrator(nn.Module):
             if learn_class_scales
             else None
         )
-        self.logit_residual_matrix = (
-            nn.Parameter(torch.zeros(self.num_classes, self.num_classes))
-            if learn_logit_residual_corrector
-            else None
-        )
+        self.logit_mixer_residual = nn.Parameter(torch.zeros(self.num_classes, self.num_classes)) if learn_logit_mixer else None
         self.prior_mode = "none"
         self.prior_alpha = 0.0
-
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        legacy_strength_key = prefix + "blend_strength"
-        strength_key = prefix + "reversibility_strength"
-        if legacy_strength_key in state_dict:
-            if strength_key not in state_dict:
-                state_dict[strength_key] = state_dict[legacy_strength_key]
-            state_dict.pop(legacy_strength_key, None)
-        legacy_matrix_key = prefix + "logit_mixer_residual"
-        matrix_key = prefix + "logit_residual_matrix"
-        if legacy_matrix_key in state_dict:
-            if matrix_key not in state_dict:
-                state_dict[matrix_key] = state_dict[legacy_matrix_key]
-            state_dict.pop(legacy_matrix_key, None)
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
     def forward_without_prior(self, logits: torch.Tensor) -> torch.Tensor:
         if self.scaler is not None:
             logits = self.scaler(logits)
-        if self.logit_residual_matrix is not None and self.max_logit_residual > 0.0:
-            residual = self.max_logit_residual * torch.tanh(self.logit_residual_matrix)
+        if self.logit_mixer_residual is not None and self.max_logit_mixer_residual > 0.0:
+            residual = self.max_logit_mixer_residual * torch.tanh(self.logit_mixer_residual)
             logits = logits + logits @ residual.to(device=logits.device, dtype=logits.dtype).t()
         return logits
 
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
         calibrated_logits = self.forward_without_prior(logits)
         calibrated_logits = calibrated_logits + self.prior_bias.to(device=logits.device, dtype=logits.dtype).view(1, -1)
-        reversibility = self.reversibility_strength.to(device=logits.device, dtype=logits.dtype)
-        return logits + reversibility * (calibrated_logits - logits)
+        blend = self.blend_strength.to(device=logits.device, dtype=logits.dtype)
+        return logits + blend * (calibrated_logits - logits)
 
     @torch.no_grad()
     def set_prior_correction(self, mode: str, alpha: float) -> None:
@@ -341,17 +292,9 @@ class ReversibleTailPriorCalibrator(nn.Module):
         self.prior_alpha = float(alpha)
 
     @torch.no_grad()
-    def set_reversibility_strength(self, strength: float) -> None:
-        clipped = min(1.0, max(0.0, float(strength)))
-        self.reversibility_strength.fill_(clipped)
-
-    @property
-    def blend_strength(self) -> torch.Tensor:
-        return self.reversibility_strength
-
-    @torch.no_grad()
     def set_blend_strength(self, strength: float) -> None:
-        self.set_reversibility_strength(strength)
+        clipped = min(1.0, max(0.0, float(strength)))
+        self.blend_strength.fill_(clipped)
 
 
 @torch.no_grad()
@@ -403,7 +346,6 @@ def search_prior_correction(
     return best_result
 
 
-# Backward-compatible aliases for older experiment scripts.
+# Backward-compatible aliases for older Windows experiment scripts.
 PostHocCalibrationConfig = RTPCConfig
-ClassWiseLogitScaler = TailAwareLogitScaler
 PostHocLogitCalibrator = ReversibleTailPriorCalibrator

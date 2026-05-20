@@ -209,7 +209,7 @@ class TokenSpatialProjector(nn.Module):
 
 class GaborActivation(nn.Module):
     """
-    Trainable Gabor-like activation used in token-guided spatial-frequency interaction.
+    Trainable Gabor-like activation used in TSFI interaction.
     """
 
     def __init__(self, channels: int) -> None:
@@ -257,7 +257,7 @@ def _spectral_hilbert_imag(x: torch.Tensor) -> torch.Tensor:
 
 class AmplitudePhaseChannelRecalibration(nn.Module):
     """
-    Amplitude-phase channel recalibration over analytic complex spectral features.
+    APCR: amplitude-phase channel recalibration over complex features.
     """
 
     def __init__(self, channels: int, reduction: int = 4) -> None:
@@ -288,7 +288,7 @@ class AmplitudePhaseChannelRecalibration(nn.Module):
 
 class AnalyticComplexSpectralEncoder(nn.Module):
     """
-    Lightweight analytic complex spectral encoder for SPARC-Net.
+    ACSE: lightweight analytic complex spectral encoder.
     """
 
     def __init__(
@@ -356,7 +356,7 @@ class AdapterOutput:
 
 class AmplitudePhaseTokenAdapter(nn.Module):
     """
-    Amplitude-phase token adapter:
+    APTA: amplitude-phase token adapter:
     1) split to magnitude/phase or real/imag
     2) 1x1 channel projection
     3) unfold to local patches
@@ -439,6 +439,60 @@ class AmplitudePhaseTokenAdapter(nn.Module):
         )
 
 
+class PlainTokenAdapter(nn.Module):
+    """
+    Baseline adapter for APTA ablation.
+    It keeps the same output contract, but removes magnitude/phase splitting and
+    the separate spectral/spatial token encoders.
+    """
+
+    def __init__(
+        self,
+        complex_channels: int,
+        adapter_channels: int,
+        patch_size: int = 3,
+        patch_stride: int = 1,
+        token_dim: int = 96,
+    ) -> None:
+        super().__init__()
+        self.patch_size = patch_size
+        self.patch_stride = patch_stride
+        self.patch_pad = patch_size // 2
+        self.unfold = nn.Unfold(
+            kernel_size=patch_size,
+            stride=patch_stride,
+            padding=self.patch_pad,
+        )
+        self.input_proj = _conv_bn_act(2 * complex_channels, adapter_channels, kernel_size=1)
+        patch_vec_dim = adapter_channels * patch_size * patch_size
+        self.token_proj = nn.Linear(patch_vec_dim, token_dim)
+
+    def forward(self, real: torch.Tensor, imag: torch.Tensor) -> AdapterOutput:
+        feat = self.input_proj(torch.cat([real, imag], dim=1))
+
+        _, _, h, w = feat.shape
+        token_h = (h + 2 * self.patch_pad - self.patch_size) // self.patch_stride + 1
+        token_w = (w + 2 * self.patch_pad - self.patch_size) // self.patch_stride + 1
+
+        patches = self.unfold(feat).transpose(1, 2)
+        tokens = self.token_proj(patches)
+        pos = _build_2d_sincos_pos_embed(
+            height=token_h,
+            width=token_w,
+            dim=tokens.shape[-1],
+            device=tokens.device,
+            dtype=tokens.dtype,
+        )
+        tokens = tokens + pos
+
+        return AdapterOutput(
+            feature_map=feat,
+            z_spe=tokens,
+            z_spa=tokens,
+            token_hw=(token_h, token_w),
+        )
+
+
 class SpatialHighFrequencyBranch(nn.Module):
     """
     Spatial branch that compensates local high-frequency details.
@@ -459,7 +513,7 @@ class SpatialHighFrequencyBranch(nn.Module):
 
 class DualAxisAmplitudePhaseFrequencyBranch(nn.Module):
     """
-    Joint frequency branch:
+    DAF Branch:
     spatial FFT + spectral/channel FFT -> amplitude/phase decoupling ->
     latent-conditioned processing -> adaptive fusion.
     """
@@ -640,7 +694,7 @@ class DualAxisAmplitudePhaseFrequencyBranch(nn.Module):
 
 class TokenGuidedSpatialFrequencyInteraction(nn.Module):
     """
-    Token-guided spatial-frequency interaction (TSFI) with Gabor activation.
+    TSFI: token-guided spatial-frequency interaction with Gabor activation.
     """
 
     def __init__(self, channels: int, token_dim: int) -> None:
@@ -682,7 +736,7 @@ class TokenGuidedSpatialFrequencyInteraction(nn.Module):
 
 class SpatialFrequencyFusionCore(nn.Module):
     """
-    Spatial-frequency fusion core with high-frequency, dual-axis frequency and TSFI paths.
+    Spatial-frequency fusion core with Spa-Fre IFF + TSFI.
     """
 
     def __init__(
@@ -700,11 +754,11 @@ class SpatialFrequencyFusionCore(nn.Module):
         self.use_spatial_branch = use_spatial_branch
         self.use_frequency_branch = use_frequency_branch
         self.use_tsfi = use_tsfi
-        # Deprecated compatibility flag; prefer use_tsfi.
-        self.use_sfid = use_tsfi
         self.spa_branch = SpatialHighFrequencyBranch(channels) if use_spatial_branch else None
-        self.fre_branch = DualAxisAmplitudePhaseFrequencyBranch(channels, token_dim=token_dim) if use_frequency_branch else None
-        self.sfid = TokenGuidedSpatialFrequencyInteraction(channels, token_dim=token_dim) if use_tsfi else None
+        self.fre_branch = (
+            DualAxisAmplitudePhaseFrequencyBranch(channels, token_dim=token_dim) if use_frequency_branch else None
+        )
+        self.tsfi = TokenGuidedSpatialFrequencyInteraction(channels, token_dim=token_dim) if use_tsfi else None
 
     def forward(
         self,
@@ -721,8 +775,8 @@ class SpatialFrequencyFusionCore(nn.Module):
         fre_feat = self.fre_branch(x, z_spe=z_spe, raw_hint=raw_hint) if self.fre_branch is not None else x
 
         if self.use_spatial_branch and self.use_frequency_branch:
-            if self.use_tsfi and self.sfid is not None:
-                return self.sfid(spa_feat, fre_feat, z_spa=z_spa, z_spe=z_spe, token_hw=token_hw)
+            if self.use_tsfi and self.tsfi is not None:
+                return self.tsfi(spa_feat, fre_feat, z_spa=z_spa, z_spe=z_spe, token_hw=token_hw)
             return 0.5 * (spa_feat + fre_feat)
         if self.use_spatial_branch:
             return spa_feat
@@ -793,7 +847,8 @@ class MultiScaleContext(nn.Module):
 
 class SpectralFidelityFusionGate(nn.Module):
     """
-    Preserve spectral fidelity while allowing discriminative fusion updates.
+    SFF Gate: keep the upgraded fusion path discriminative without letting it
+    drift too far from the stable adapter feature space.
     """
 
     def __init__(self, channels: int, token_dim: int) -> None:
@@ -838,7 +893,7 @@ class SpectralFidelityFusionGate(nn.Module):
 
 class SpectralAnchorBypass(nn.Module):
     """
-    Preserve the raw spectral signature through a gated spectral anchor.
+    SAB: preserve raw spectral signature through a gated bypass.
     """
 
     def __init__(self, raw_channels: int, fuse_channels: int, token_dim: int) -> None:
@@ -874,7 +929,7 @@ class SpectralAnchorBypass(nn.Module):
 
 class BaselineSpatialSpectralBackbone(nn.Module):
     """
-    Plain convolutional backbone used for strict Innovation1 ablation.
+    Plain convolutional backbone used for strict SPAP Backbone ablation.
 
     It keeps only a lightweight residual CNN over the raw HSI patch and removes
     the proposed complex-valued, spatial-frequency and spectral-fidelity modules.
@@ -897,15 +952,12 @@ class BaselineSpatialSpectralBackbone(nn.Module):
 
 class SPARCNet(nn.Module):
     """
-    SPARC-Net: Spectral-Preserving Amplitude-Phase Representation and
-    Reliable Correction Network.
+    Optimized fusion architecture:
+    SPAP Backbone on:
+    ACSE -> APTA -> Spatial-Frequency Fusion Core (Spa-Fre IFF + TSFI) ->
+    optional Transformer -> Multi-scale Context -> SAB.
 
-    Innovation1 on:
-    analytic complex spectral encoder -> amplitude-phase token adapter ->
-    spatial-frequency fusion core with TSFI -> optional Transformer ->
-    multi-scale context -> spectral anchor bypass.
-
-    Innovation1 off:
+    SPAP Backbone off:
     Plain residual CNN backbone.
     """
 
@@ -921,11 +973,14 @@ class SPARCNet(nn.Module):
         analytic_init: str = "none",
         backbone_mode: str = "innovation1",
         use_complex_attention: bool = True,
+        use_apta: bool = True,
         use_spatial_branch: bool = True,
         use_frequency_branch: bool = True,
-        use_tsfi: bool = True,
+        use_tsfi: Optional[bool] = None,
+        use_sfid: Optional[bool] = None,
         use_transformer: bool = True,
         use_multi_scale: bool = True,
+        use_sff_gate: bool = True,
         use_spectral_bypass: bool = True,
         transformer_heads: int = 4,
         transformer_depth: int = 1,
@@ -939,37 +994,36 @@ class SPARCNet(nn.Module):
         use_dynamic_gate: bool = True,
         use_auxiliary_heads: bool = True,
         prototype_momentum: float = 0.9,
-        anchor_correction_min: float = 0.05,
-        anchor_correction_max: float = 0.45,
-        prototype_blend_min: Optional[float] = None,
-        prototype_blend_max: Optional[float] = None,
+        prototype_blend_min: float = 0.05,
+        prototype_blend_max: float = 0.45,
         alignment_scale_limit: float = 0.35,
         alignment_bias_limit: float = 0.20,
         freeze_source_classifier_in_stage2: bool = True,
         num_classes: Optional[int] = None,
-        use_sfid: Optional[bool] = None,
     ) -> None:
         super().__init__()
-        if use_sfid is not None:
-            use_tsfi = bool(use_sfid)
         if classifier_type not in {"linear", "long_tail"}:
             raise ValueError("classifier_type must be 'linear' or 'long_tail'.")
         if backbone_mode not in {"innovation1", "baseline"}:
             raise ValueError("backbone_mode must be 'innovation1' or 'baseline'.")
         if head_mode not in {"innovation2", "baseline"}:
             raise ValueError("head_mode must be 'innovation2' or 'baseline'.")
+        if use_tsfi is None:
+            use_tsfi = True if use_sfid is None else bool(use_sfid)
+        elif use_sfid is not None and bool(use_sfid) != bool(use_tsfi):
+            raise ValueError("Conflicting SPARCNet switches: use_tsfi and legacy use_sfid.")
 
         self.backbone_mode = backbone_mode
         self.head_mode = head_mode
         self.baseline_backbone = None
-        self.cvoca = None
-        self.adapter = None
+        self.acse = None
+        self.apta = None
         self.raw_hint_proj = None
-        self.feinfn = None
+        self.sffc = None
         self.transformer = None
         self.multi_scale = None
-        self.fusion_stabilizer = None
-        self.spectral_bypass = None
+        self.sff_gate = None
+        self.sab = None
         self.use_transformer = False
         self.use_multi_scale = False
         self.use_spectral_bypass = False
@@ -977,22 +1031,31 @@ class SPARCNet(nn.Module):
         if backbone_mode == "baseline":
             self.baseline_backbone = BaselineSpatialSpectralBackbone(in_channels, adapter_channels)
         else:
-            self.cvoca = AnalyticComplexSpectralEncoder(
+            self.acse = AnalyticComplexSpectralEncoder(
                 in_channels,
                 out_channels=base_channels,
                 analytic_init=analytic_init,
                 use_complex_attention=use_complex_attention,
             )
-            self.adapter = AmplitudePhaseTokenAdapter(
-                complex_channels=base_channels,
-                adapter_channels=adapter_channels,
-                patch_size=patch_size,
-                patch_stride=patch_stride,
-                token_dim=token_dim,
-                split_mode=split_mode,
-            )
+            if use_apta:
+                self.apta = AmplitudePhaseTokenAdapter(
+                    complex_channels=base_channels,
+                    adapter_channels=adapter_channels,
+                    patch_size=patch_size,
+                    patch_stride=patch_stride,
+                    token_dim=token_dim,
+                    split_mode=split_mode,
+                )
+            else:
+                self.apta = PlainTokenAdapter(
+                    complex_channels=base_channels,
+                    adapter_channels=adapter_channels,
+                    patch_size=patch_size,
+                    patch_stride=patch_stride,
+                    token_dim=token_dim,
+                )
             self.raw_hint_proj = _conv_bn_act(in_channels, adapter_channels, kernel_size=1)
-            self.feinfn = SpatialFrequencyFusionCore(
+            self.sffc = SpatialFrequencyFusionCore(
                 channels=adapter_channels,
                 token_dim=token_dim,
                 use_spatial_branch=use_spatial_branch,
@@ -1011,13 +1074,14 @@ class SPARCNet(nn.Module):
                 self.transformer = nn.Identity()
             self.use_multi_scale = use_multi_scale
             self.multi_scale = MultiScaleContext(adapter_channels) if use_multi_scale else None
-            self.fusion_stabilizer = (
+            self.sff_gate = (
                 SpectralFidelityFusionGate(adapter_channels, token_dim=token_dim)
-                if any((use_spatial_branch, use_frequency_branch, use_tsfi, use_transformer, use_multi_scale))
+                if use_sff_gate
+                and any((use_spatial_branch, use_frequency_branch, use_tsfi, use_transformer, use_multi_scale))
                 else None
             )
             self.use_spectral_bypass = use_spectral_bypass
-            self.spectral_bypass = (
+            self.sab = (
                 SpectralAnchorBypass(
                     raw_channels=in_channels,
                     fuse_channels=adapter_channels,
@@ -1056,8 +1120,6 @@ class SPARCNet(nn.Module):
                 use_prototype_branch=use_prototype_branch,
                 use_dynamic_gate=use_dynamic_gate,
                 prototype_momentum=prototype_momentum,
-                anchor_correction_min=anchor_correction_min,
-                anchor_correction_max=anchor_correction_max,
                 prototype_blend_min=prototype_blend_min,
                 prototype_blend_max=prototype_blend_max,
                 use_auxiliary_heads=use_auxiliary_heads,
@@ -1076,11 +1138,11 @@ class SPARCNet(nn.Module):
             stability_gate = torch.ones_like(final_feat)
             gate = torch.ones_like(final_feat)
         else:
-            real, imag = self.cvoca(x)
-            adapter_out = self.adapter(real, imag)
+            real, imag = self.acse(x)
+            adapter_out = self.apta(real, imag)
             raw_hint = self.raw_hint_proj(x)
 
-            fused = self.feinfn(
+            fused = self.sffc(
                 adapter_out.feature_map,
                 z_spa=adapter_out.z_spa,
                 z_spe=adapter_out.z_spe,
@@ -1090,8 +1152,8 @@ class SPARCNet(nn.Module):
             fused = self.transformer(fused) if self.use_transformer else fused
             if self.multi_scale is not None:
                 fused = self.multi_scale(fused)
-            if self.fusion_stabilizer is not None:
-                fused, stability_gate = self.fusion_stabilizer(
+            if self.sff_gate is not None:
+                fused, stability_gate = self.sff_gate(
                     candidate_feat=fused,
                     base_feat=adapter_out.feature_map,
                     raw_hint=raw_hint,
@@ -1100,8 +1162,8 @@ class SPARCNet(nn.Module):
             else:
                 stability_gate = torch.ones_like(fused)
 
-            if self.spectral_bypass is not None:
-                final_feat, gate = self.spectral_bypass(fused_feat=fused, raw_spectral=x, z_spe=adapter_out.z_spe)
+            if self.sab is not None:
+                final_feat, gate = self.sab(fused_feat=fused, raw_spectral=x, z_spe=adapter_out.z_spe)
             else:
                 final_feat = fused
                 gate = torch.ones_like(fused)
@@ -1197,13 +1259,13 @@ class SPARCNet(nn.Module):
 
         backbone_modules = [
             self.baseline_backbone,
-            self.cvoca,
-            self.adapter,
-            self.feinfn,
+            self.acse,
+            self.apta,
+            self.sffc,
             self.transformer,
             self.multi_scale,
-            self.fusion_stabilizer,
-            self.spectral_bypass,
+            self.sff_gate,
+            self.sab,
         ]
         for module in backbone_modules:
             if module is None:
@@ -1230,17 +1292,17 @@ class SPARCNet(nn.Module):
     def backbone_parameters(self):
         backbone_parameter_groups = [
             self.baseline_backbone.parameters() if self.baseline_backbone is not None else iter(()),
-            self.cvoca.parameters() if self.cvoca is not None else iter(()),
-            self.adapter.parameters() if self.adapter is not None else iter(()),
-            self.feinfn.parameters() if self.feinfn is not None else iter(()),
+            self.acse.parameters() if self.acse is not None else iter(()),
+            self.apta.parameters() if self.apta is not None else iter(()),
+            self.sffc.parameters() if self.sffc is not None else iter(()),
             self.transformer.parameters() if self.transformer is not None else iter(()),
         ]
         if self.multi_scale is not None:
             backbone_parameter_groups.append(self.multi_scale.parameters())
-        if self.fusion_stabilizer is not None:
-            backbone_parameter_groups.append(self.fusion_stabilizer.parameters())
-        if self.spectral_bypass is not None:
-            backbone_parameter_groups.append(self.spectral_bypass.parameters())
+        if self.sff_gate is not None:
+            backbone_parameter_groups.append(self.sff_gate.parameters())
+        if self.sab is not None:
+            backbone_parameter_groups.append(self.sab.parameters())
         return chain(*backbone_parameter_groups)
 
     @property
@@ -1250,7 +1312,7 @@ class SPARCNet(nn.Module):
         return getattr(self.classifier, "margin_mode", "linear")
 
 
-# Backward-compatible aliases for older experiment scripts and checkpoints.
+# Backward-compatible aliases for old experiment scripts and checkpoints.
 ComplexChannelAttention = AmplitudePhaseChannelRecalibration
 CVOCAFeatureExtractor = AnalyticComplexSpectralEncoder
 CVOCAFeINFNAdapter = AmplitudePhaseTokenAdapter
