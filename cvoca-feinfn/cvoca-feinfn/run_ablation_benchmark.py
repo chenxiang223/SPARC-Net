@@ -89,7 +89,7 @@ DATASET_PRESETS: Dict[str, Dict[str, Any]] = {
 VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
     "full": {
         "label": "Full",
-        "description": "Full SPARC-Net with SPAP Backbone, MRPC Head, staged training, and RTPC enabled.",
+        "description": "Full SPARC-Net after removing the negative APTA branch.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": True,
@@ -108,15 +108,15 @@ VARIANT_PRESETS: Dict[str, Dict[str, Any]] = {
             "backbone_detail": {"use_complex_attention": False},
         },
     },
-    "wo_apta": {
-        "label": "w/o APTA",
-        "description": "Replace the amplitude-phase token adapter with a plain real-imag token adapter.",
+    "with_apta": {
+        "label": "w/ APTA",
+        "description": "Legacy comparison that re-enables the removed amplitude-phase token adapter.",
         "switches": {
             "use_spap_backbone": True,
             "use_mrpc_head": True,
             "use_staged_training_engine": True,
             "use_rtpc_calibration": True,
-            "backbone_detail": {"use_apta": False},
+            "backbone_detail": {"use_apta": True},
         },
     },
     "wo_sffc": {

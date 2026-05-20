@@ -441,9 +441,10 @@ class AmplitudePhaseTokenAdapter(nn.Module):
 
 class PlainTokenAdapter(nn.Module):
     """
-    Baseline adapter for APTA ablation.
-    It keeps the same output contract, but removes magnitude/phase splitting and
-    the separate spectral/spatial token encoders.
+    Lightweight token adapter used by the default SPARC-Net backbone.
+
+    It keeps the same output contract expected by SFFC/TSFI, but removes the
+    heavier APTA magnitude/phase split and separate spectral/spatial encoders.
     """
 
     def __init__(
@@ -954,7 +955,8 @@ class SPARCNet(nn.Module):
     """
     Optimized fusion architecture:
     SPAP Backbone on:
-    ACSE -> APTA -> Spatial-Frequency Fusion Core (Spa-Fre IFF + TSFI) ->
+    ACSE -> lightweight real-imag token adapter ->
+    Spatial-Frequency Fusion Core (Spa-Fre IFF + TSFI) ->
     optional Transformer -> Multi-scale Context -> SAB.
 
     SPAP Backbone off:
@@ -973,7 +975,7 @@ class SPARCNet(nn.Module):
         analytic_init: str = "none",
         backbone_mode: str = "innovation1",
         use_complex_attention: bool = True,
-        use_apta: bool = True,
+        use_apta: bool = False,
         use_spatial_branch: bool = True,
         use_frequency_branch: bool = True,
         use_tsfi: Optional[bool] = None,
@@ -1027,6 +1029,7 @@ class SPARCNet(nn.Module):
         self.use_transformer = False
         self.use_multi_scale = False
         self.use_spectral_bypass = False
+        self.use_apta = bool(use_apta)
 
         if backbone_mode == "baseline":
             self.baseline_backbone = BaselineSpatialSpectralBackbone(in_channels, adapter_channels)
@@ -1315,7 +1318,8 @@ class SPARCNet(nn.Module):
 # Backward-compatible aliases for old experiment scripts and checkpoints.
 ComplexChannelAttention = AmplitudePhaseChannelRecalibration
 CVOCAFeatureExtractor = AnalyticComplexSpectralEncoder
-CVOCAFeINFNAdapter = AmplitudePhaseTokenAdapter
+CVOCAFeINFNAdapter = PlainTokenAdapter
+LegacyAmplitudePhaseTokenAdapter = AmplitudePhaseTokenAdapter
 FrequencyAmplitudePhaseBranch = DualAxisAmplitudePhaseFrequencyBranch
 SFIDInteraction = TokenGuidedSpatialFrequencyInteraction
 FeINFNCore = SpatialFrequencyFusionCore

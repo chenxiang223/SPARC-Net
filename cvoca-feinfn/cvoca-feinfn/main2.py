@@ -220,7 +220,7 @@ CONFIG["dataset"]["ablation"] = {
     # 这些开关仅在对应的一级总开关为 True 时生效，用于分析模块内部子机制。
     "backbone_detail": {
         "use_complex_attention": False,  # APCR: amplitude-phase channel recalibration.
-        "use_apta": True,  # APTA: amplitude-phase token adapter.
+        "use_apta": False,  # Legacy APTA is opt-in; default uses the lighter real-imag token adapter.
         "use_spatial_branch": True,  # Spatial high-frequency branch.
         "use_frequency_branch": True,  # DAF Branch: dual-axis amplitude-phase frequency branch.
         "use_tsfi": True,  # TSFI: token-guided spatial-frequency interaction.
@@ -341,7 +341,7 @@ INNOVATION_SWITCH_ALIASES: Dict[str, str] = {
 
 DEFAULT_BACKBONE_DETAIL_SWITCHES: Dict[str, bool] = {
     "use_complex_attention": True,
-    "use_apta": True,
+    "use_apta": False,
     "use_spatial_branch": True,
     "use_frequency_branch": True,
     "use_tsfi": True,
@@ -830,7 +830,7 @@ def print_ablation_plan(config: Dict[str, Any]) -> None:
                 ("Effective backbone mode", ablation["backbone_mode"]),
                 ("Effective head mode", ablation["head_mode"]),
                 ("Backbone detail - APCR", ablation["use_complex_attention"]),
-                ("Backbone detail - APTA", ablation["use_apta"]),
+                ("Backbone detail - legacy APTA", ablation["use_apta"]),
                 ("Backbone detail - spatial branch", ablation["use_spatial_branch"]),
                 ("Backbone detail - DAF Branch", ablation["use_frequency_branch"]),
                 ("Backbone detail - TSFI", ablation["use_tsfi"]),
