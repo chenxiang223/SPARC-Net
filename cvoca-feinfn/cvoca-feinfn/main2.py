@@ -136,7 +136,6 @@ CONFIG: Dict[str, Any] = {
         "token_dim": 96,
         "patch_size": 3,
         "patch_stride": 1,
-        "split_mode": "mag_phase",
         "analytic_init": "hybrid",
         "use_transformer": True,
         "transformer_heads": 4,
@@ -220,7 +219,6 @@ CONFIG["dataset"]["ablation"] = {
     # 这些开关仅在对应的一级总开关为 True 时生效，用于分析模块内部子机制。
     "backbone_detail": {
         "use_complex_attention": False,  # APCR: amplitude-phase channel recalibration.
-        "use_apta": False,  # Legacy APTA is opt-in; default uses the lighter real-imag token adapter.
         "use_spatial_branch": True,  # Spatial high-frequency branch.
         "use_frequency_branch": True,  # DAF Branch: dual-axis amplitude-phase frequency branch.
         "use_tsfi": True,  # TSFI: token-guided spatial-frequency interaction.
@@ -341,7 +339,6 @@ INNOVATION_SWITCH_ALIASES: Dict[str, str] = {
 
 DEFAULT_BACKBONE_DETAIL_SWITCHES: Dict[str, bool] = {
     "use_complex_attention": True,
-    "use_apta": False,
     "use_spatial_branch": True,
     "use_frequency_branch": True,
     "use_tsfi": True,
@@ -461,7 +458,6 @@ def get_ablation_switches(config: Dict[str, Any]) -> Dict[str, Any]:
         "backbone_mode": "innovation1" if backbone_on else "baseline",
         "head_mode": "innovation2" if prototype_head_on else "baseline",
         "use_complex_attention": backbone_on and detail["backbone_detail"]["use_complex_attention"],
-        "use_apta": backbone_on and detail["backbone_detail"]["use_apta"],
         "use_spatial_branch": backbone_on and detail["backbone_detail"]["use_spatial_branch"],
         "use_frequency_branch": backbone_on and detail["backbone_detail"]["use_frequency_branch"],
         "use_tsfi": backbone_on and detail["backbone_detail"]["use_tsfi"],
@@ -502,7 +498,6 @@ def build_effective_model_config(config: Dict[str, Any], ablation: Dict[str, Any
             "backbone_mode": ablation["backbone_mode"],
             "head_mode": ablation["head_mode"],
             "use_complex_attention": ablation["use_complex_attention"],
-            "use_apta": ablation["use_apta"],
             "use_spatial_branch": ablation["use_spatial_branch"],
             "use_frequency_branch": ablation["use_frequency_branch"],
             "use_tsfi": ablation["use_tsfi"],
@@ -830,7 +825,6 @@ def print_ablation_plan(config: Dict[str, Any]) -> None:
                 ("Effective backbone mode", ablation["backbone_mode"]),
                 ("Effective head mode", ablation["head_mode"]),
                 ("Backbone detail - APCR", ablation["use_complex_attention"]),
-                ("Backbone detail - legacy APTA", ablation["use_apta"]),
                 ("Backbone detail - spatial branch", ablation["use_spatial_branch"]),
                 ("Backbone detail - DAF Branch", ablation["use_frequency_branch"]),
                 ("Backbone detail - TSFI", ablation["use_tsfi"]),

@@ -1,6 +1,5 @@
 from .cvoca_feinfn_fusion import (
     AmplitudePhaseChannelRecalibration,
-    AmplitudePhaseTokenAdapter,
     AnalyticComplexSpectralEncoder,
     CVOCAFeatureExtractor,
     CVOCAFeINFNAdapter,
@@ -9,7 +8,6 @@ from .cvoca_feinfn_fusion import (
     DualAxisAmplitudePhaseFrequencyBranch,
     FeINFNCore,
     FrequencyAmplitudePhaseBranch,
-    LegacyAmplitudePhaseTokenAdapter,
     PlainTokenAdapter,
     RepresentationPreservingFusionGate,
     SFIDInteraction,
@@ -31,7 +29,6 @@ from .heads import (
 __all__ = [
     "BaselineCosineHead",
     "AmplitudePhaseChannelRecalibration",
-    "AmplitudePhaseTokenAdapter",
     "AnalyticComplexSpectralEncoder",
     "ClassificationHead",
     "CosineClassifier",
@@ -42,7 +39,6 @@ __all__ = [
     "DualAxisAmplitudePhaseFrequencyBranch",
     "FeINFNCore",
     "FrequencyAmplitudePhaseBranch",
-    "LegacyAmplitudePhaseTokenAdapter",
     "LongTailDynamicHead",
     "MainAnchoredReliablePrototypeCorrectionHead",
     "PlainTokenAdapter",

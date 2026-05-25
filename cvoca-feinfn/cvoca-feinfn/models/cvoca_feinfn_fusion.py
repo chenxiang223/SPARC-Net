@@ -354,97 +354,12 @@ class AdapterOutput:
     token_hw: Tuple[int, int]
 
 
-class AmplitudePhaseTokenAdapter(nn.Module):
-    """
-    APTA: amplitude-phase token adapter:
-    1) split to magnitude/phase or real/imag
-    2) 1x1 channel projection
-    3) unfold to local patches
-    4) add positional encoding
-    5) generate z_spe and z_spa
-    """
-
-    def __init__(
-        self,
-        complex_channels: int,
-        adapter_channels: int,
-        patch_size: int = 3,
-        patch_stride: int = 1,
-        token_dim: int = 96,
-        split_mode: str = "mag_phase",
-    ) -> None:
-        super().__init__()
-        if split_mode not in {"mag_phase", "real_imag"}:
-            raise ValueError(f"split_mode must be 'mag_phase' or 'real_imag', got {split_mode}.")
-        self.split_mode = split_mode
-        self.patch_size = patch_size
-        self.patch_stride = patch_stride
-        self.patch_pad = patch_size // 2
-        self.unfold = nn.Unfold(
-            kernel_size=patch_size,
-            stride=patch_stride,
-            padding=self.patch_pad,
-        )
-        self.input_proj = _conv_bn_act(2 * complex_channels, adapter_channels, kernel_size=1)
-        self.spe_encoder = nn.Sequential(
-            _conv_bn_act(adapter_channels, adapter_channels, kernel_size=1),
-            _conv_bn_act(adapter_channels, adapter_channels, kernel_size=3, groups=adapter_channels),
-            _conv_bn_act(adapter_channels, adapter_channels, kernel_size=1),
-        )
-        self.spa_encoder = nn.Sequential(
-            _conv_bn_act(adapter_channels, adapter_channels, kernel_size=3, groups=adapter_channels),
-            _conv_bn_act(adapter_channels, adapter_channels, kernel_size=1),
-        )
-        patch_vec_dim = adapter_channels * patch_size * patch_size
-        self.spe_token_proj = nn.Linear(patch_vec_dim, token_dim)
-        self.spa_token_proj = nn.Linear(patch_vec_dim, token_dim)
-
-    def _split_complex(self, real: torch.Tensor, imag: torch.Tensor) -> torch.Tensor:
-        if self.split_mode == "mag_phase":
-            mag = torch.sqrt(real.square() + imag.square() + 1e-6)
-            phase = torch.atan2(imag, real + 1e-6)
-            return torch.cat([mag, phase], dim=1)
-        return torch.cat([real, imag], dim=1)
-
-    def forward(self, real: torch.Tensor, imag: torch.Tensor) -> AdapterOutput:
-        fused = self._split_complex(real, imag)
-        feat = self.input_proj(fused)
-        spe_map = self.spe_encoder(feat)
-        spa_map = self.spa_encoder(feat)
-
-        _, _, h, w = feat.shape
-        token_h = (h + 2 * self.patch_pad - self.patch_size) // self.patch_stride + 1
-        token_w = (w + 2 * self.patch_pad - self.patch_size) // self.patch_stride + 1
-
-        spe_patches = self.unfold(spe_map).transpose(1, 2)
-        spa_patches = self.unfold(spa_map).transpose(1, 2)
-        z_spe = self.spe_token_proj(spe_patches)
-        z_spa = self.spa_token_proj(spa_patches)
-
-        pos = _build_2d_sincos_pos_embed(
-            height=token_h,
-            width=token_w,
-            dim=z_spe.shape[-1],
-            device=z_spe.device,
-            dtype=z_spe.dtype,
-        )
-        z_spe = z_spe + pos
-        z_spa = z_spa + pos
-
-        return AdapterOutput(
-            feature_map=feat,
-            z_spe=z_spe,
-            z_spa=z_spa,
-            token_hw=(token_h, token_w),
-        )
-
-
 class PlainTokenAdapter(nn.Module):
     """
     Lightweight token adapter used by the default SPARC-Net backbone.
 
-    It keeps the same output contract expected by SFFC/TSFI, but removes the
-    heavier APTA magnitude/phase split and separate spectral/spatial encoders.
+    It keeps the output contract expected by SFFC/TSFI using a single shared
+    real-imag projection and shared token stream.
     """
 
     def __init__(
@@ -971,11 +886,9 @@ class SPARCNet(nn.Module):
         token_dim: int = 96,
         patch_size: int = 3,
         patch_stride: int = 1,
-        split_mode: str = "mag_phase",
         analytic_init: str = "none",
         backbone_mode: str = "innovation1",
         use_complex_attention: bool = True,
-        use_apta: bool = False,
         use_spatial_branch: bool = True,
         use_frequency_branch: bool = True,
         use_tsfi: Optional[bool] = None,
@@ -1019,7 +932,7 @@ class SPARCNet(nn.Module):
         self.head_mode = head_mode
         self.baseline_backbone = None
         self.acse = None
-        self.apta = None
+        self.token_adapter = None
         self.raw_hint_proj = None
         self.sffc = None
         self.transformer = None
@@ -1029,7 +942,6 @@ class SPARCNet(nn.Module):
         self.use_transformer = False
         self.use_multi_scale = False
         self.use_spectral_bypass = False
-        self.use_apta = bool(use_apta)
 
         if backbone_mode == "baseline":
             self.baseline_backbone = BaselineSpatialSpectralBackbone(in_channels, adapter_channels)
@@ -1040,23 +952,13 @@ class SPARCNet(nn.Module):
                 analytic_init=analytic_init,
                 use_complex_attention=use_complex_attention,
             )
-            if use_apta:
-                self.apta = AmplitudePhaseTokenAdapter(
-                    complex_channels=base_channels,
-                    adapter_channels=adapter_channels,
-                    patch_size=patch_size,
-                    patch_stride=patch_stride,
-                    token_dim=token_dim,
-                    split_mode=split_mode,
-                )
-            else:
-                self.apta = PlainTokenAdapter(
-                    complex_channels=base_channels,
-                    adapter_channels=adapter_channels,
-                    patch_size=patch_size,
-                    patch_stride=patch_stride,
-                    token_dim=token_dim,
-                )
+            self.token_adapter = PlainTokenAdapter(
+                complex_channels=base_channels,
+                adapter_channels=adapter_channels,
+                patch_size=patch_size,
+                patch_stride=patch_stride,
+                token_dim=token_dim,
+            )
             self.raw_hint_proj = _conv_bn_act(in_channels, adapter_channels, kernel_size=1)
             self.sffc = SpatialFrequencyFusionCore(
                 channels=adapter_channels,
@@ -1142,7 +1044,7 @@ class SPARCNet(nn.Module):
             gate = torch.ones_like(final_feat)
         else:
             real, imag = self.acse(x)
-            adapter_out = self.apta(real, imag)
+            adapter_out = self.token_adapter(real, imag)
             raw_hint = self.raw_hint_proj(x)
 
             fused = self.sffc(
@@ -1263,7 +1165,7 @@ class SPARCNet(nn.Module):
         backbone_modules = [
             self.baseline_backbone,
             self.acse,
-            self.apta,
+            self.token_adapter,
             self.sffc,
             self.transformer,
             self.multi_scale,
@@ -1296,7 +1198,7 @@ class SPARCNet(nn.Module):
         backbone_parameter_groups = [
             self.baseline_backbone.parameters() if self.baseline_backbone is not None else iter(()),
             self.acse.parameters() if self.acse is not None else iter(()),
-            self.apta.parameters() if self.apta is not None else iter(()),
+            self.token_adapter.parameters() if self.token_adapter is not None else iter(()),
             self.sffc.parameters() if self.sffc is not None else iter(()),
             self.transformer.parameters() if self.transformer is not None else iter(()),
         ]
@@ -1319,7 +1221,6 @@ class SPARCNet(nn.Module):
 ComplexChannelAttention = AmplitudePhaseChannelRecalibration
 CVOCAFeatureExtractor = AnalyticComplexSpectralEncoder
 CVOCAFeINFNAdapter = PlainTokenAdapter
-LegacyAmplitudePhaseTokenAdapter = AmplitudePhaseTokenAdapter
 FrequencyAmplitudePhaseBranch = DualAxisAmplitudePhaseFrequencyBranch
 SFIDInteraction = TokenGuidedSpatialFrequencyInteraction
 FeINFNCore = SpatialFrequencyFusionCore
@@ -1337,7 +1238,6 @@ if __name__ == "__main__":
         token_dim=96,
         patch_size=3,
         patch_stride=1,
-        split_mode="mag_phase",
         use_transformer=True,
         class_counts={i: 100 - 4 * i for i in range(16)},
         num_classes=16,
